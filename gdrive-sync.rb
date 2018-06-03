@@ -1,7 +1,9 @@
 #!/bin/ruby
 
+require "rubygems"
+require "bundler/setup"
 require "rb-inotify"
-require "rx"
+require "observer"
 
 class Logger
   def log(msg)
@@ -24,6 +26,8 @@ class UserNotifier
 end
 
 class FileSystemWatcher
+  include Observable
+
   def initialize(logger, notifier, pathes)
     @logger = logger
     @notifier = notifier
@@ -48,8 +52,6 @@ class FileSystemWatcher
     else
       throw ArgumentError.new "Don't know what to do with 'pathes' as a '#{pathes.class.name}'"
     end
-
-    @subj = Rx::AsyncSubject.new
   end
 
   def start
@@ -63,15 +65,58 @@ class FileSystemWatcher
         file = e.name
         path = File.join(dir, file)
         @logger.log "[WATCHER] #{e.flags.join(",")}: event detected for #{path}"
-        @subj.on_next path
+        changed
+        notify_observers path, file, dir
       end
     end
 
     @notifier.run
   end
+end
 
-  def subscribe(*args)
-    @subj.as_observable.subscribe(*args)
+class LogObserver
+  def initialize(logger)
+    @logger = logger
+  end
+
+  def update(*args)
+    @logger.log "[OBSERVER] Received: #{args.first}"
+  end
+end
+
+class AggregatingObserver
+  include Observable
+
+  def initialize(logger, cooldown_in_millisec, checktime_in_millisec = 50)
+    @logger = logger
+    @cooldown_sec = cooldown_in_millisec / 1000
+    @check_sec = checktime_in_millisec / 1000
+
+    @thr = Thread.start do
+      loop do
+        sleep @check_sec
+        trigger if cooldown_passed?
+      end
+    end
+  end
+
+  def update(*args)
+    @logger.log "[AGGR] Received: #{args.first}"
+    @last_event_time = Time.now
+    @last_event_args = args
+  end
+
+  private
+
+  def cooldown_passed?
+    !@last_event_time.nil? && (@last_event_time + @cooldown_sec) < Time.now
+  end
+
+  def trigger
+    @logger.log "[AGGR] trigger"
+    changed
+    notify_observers(*@last_event_args)
+    @last_event_time = nil
   end
 end
 
@@ -135,6 +180,8 @@ end
 
 
 watcher = FileSystemWatcher.new Logger.new, INotify::Notifier.new, ARGV[0]
-watcher.subscribe{|path| puts "[SUBSCRIBER] Event arrived: #{path}"}
-
-Thread.new { watcher.start }
+aggr = AggregatingObserver.new Logger.new, 3_000
+watcher.add_observer aggr
+obs = LogObserver.new Logger.new
+aggr.add_observer obs
+watcher.start
