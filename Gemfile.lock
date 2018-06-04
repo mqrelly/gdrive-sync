@@ -1,0 +1,15 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    ffi (1.9.23)
+    rb-inotify (0.9.10)
+      ffi (>= 0.5.0, < 2)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  rb-inotify
+
+BUNDLED WITH
+   1.16.2
