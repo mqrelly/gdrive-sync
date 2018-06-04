@@ -7,7 +7,7 @@ require "observer"
 
 class Logger
   def log(msg)
-    puts msg
+    puts "#{Time.now.strftime "%H:%M:%S.%L"} #{msg}"
   end
 end
 
@@ -17,11 +17,11 @@ class UserNotifier
   end
 
   def info(title, msg)
-    `notify-send --urgency=normal --app-name="#{@app_name}" --category=Info "#{title}" "#{msg}"`
+    `notify-send --urgency=normal --app-name="#{@app_name}" --category=Info "#{@app_name} - #{title}" "#{msg}"`
   end
 
   def warning(title, msg)
-    `notify-send --urgency=critical --app-name="#{@app_name}" --category=Warning "#{title}" "#{msg}"`
+    `notify-send --urgency=critical --app-name="#{@app_name}" --category=Warning "#{@app_name} - #{title}" "#{msg}"`
   end
 end
 
@@ -74,16 +74,6 @@ class FileSystemWatcher
   end
 end
 
-class LogObserver
-  def initialize(logger)
-    @logger = logger
-  end
-
-  def update(*args)
-    @logger.log "[OBSERVER] Received: #{args.first}"
-  end
-end
-
 class AggregatingObserver
   include Observable
 
@@ -123,40 +113,77 @@ end
 class GDriveFileSynchronizer
   attr_reader :path, :file, :dir, :state
 
-  def initialize(path)
+  def initialize(logger, user_notifier, path)
+    @logger = logger
+    @user_notifier = user_notifier
+
     @path = path
     @state = :unsynchronized
   end
 
   def handle_change
-    if @state == :unsynchronized
-      if are_local_and_cloud_in_sync?
-        @last_known_cloud_ver = get_cloud_version
-        @state = :synchronized
+    cloud_ver = get_cloud_version
+    local_ver = get_local_version
+
+    if cloud_ver == local_ver
+      if @state == :unsynchronized
+        versions_came_in_sync(cloud_ver) 
+      else
+        still_in_sync
       end
     else
-      if did_cloud_changed?
-        @state = :unsynchronized
+      if @state == :synchronized
+        if did_cloud_changed?(cloud_ver)
+          versions_went_out_of_sync
+        else
+          push_local_to_cloud(cloud_ver)
+        end
       else
-        push_local_to_cloud
-        @last_known_cloud_ver = get_cloud_version
+        still_out_of_sync
       end
     end
   end
 
+  def update(*args)
+    handle_change
+  end
+
   private
 
-  def push_local_to_cloud
+  def still_in_sync
+    @logger.log "[SYNC] No content change for #{@path}"
+  end
+
+  def still_out_of_sync
+    @logger.log "[SYNC] Versions are still out of sync for #{@path}"
+  end
+
+  def versions_came_in_sync(cloud_ver)
+    @last_known_cloud_ver = cloud_ver
+    @state = :synchronized
+
+    @logger.log "[SYNC] Local and Cloud versions are in sync (#{@path}, #{@last_known_cloud_ver})."
+    @user_notifier.info "Auto-sync resumed", "Local and Cloud file versions are now in sync. Any local changes will be synced atuomatically for file '#{@path}'."
+  end
+
+  def versions_went_out_of_sync
+    @state = :unsynchronized
+
+    @logger.log "[SYNC] Cloud version changed since last sync. Resolve manually! File: #{@path}"
+    @user_notifier.warning "Cloud version out of sync", "The file in the Cloud changed since the last sync. Resolve the issue manually. Once the Local and Cloud versions match automatic syncing will resume."
+  end
+
+  def push_local_to_cloud(cloud_ver)
     `yes | head -1 | drive push #{@path}`
+
+    @last_known_cloud_ver = cloud_ver
+
+    @logger.log "[SYNC] Local changes pushed to Cloud (#{@path}, #{@last_known_cloud_ver})."
+    @user_notifier.info "File synced", "Local changes to file '#{@path}' are uploaded to Cloud."
   end
 
-  def are_local_and_cloud_in_sync?
-    diff = `drive diff #{@path}`
-    diff.empty?
-  end
-
-  def did_cloud_changed?
-    get_cloud_version == @last_known_cloud_ver
+  def did_cloud_changed?(cloud_ver)
+    cloud_ver != @last_known_cloud_ver
   end
 
   def get_cloud_version
@@ -168,20 +195,26 @@ class GDriveFileSynchronizer
       .first
       .split
       .last
-    mod_time = lines
-      .select{|l| l.start_with? "ModTime"}
-      .first
-      .split
-      .last
 
-    checksum + mod_time
+    checksum
+  end
+
+  def get_local_version
+    `md5sum #{@path}`.split(" ").first
   end
 end
 
 
-watcher = FileSystemWatcher.new Logger.new, INotify::Notifier.new, ARGV[0]
-aggr = AggregatingObserver.new Logger.new, 3_000
-watcher.add_observer aggr
-obs = LogObserver.new Logger.new
-aggr.add_observer obs
-watcher.start
+if $0 == __FILE__
+  logger = Logger.new
+  user_notifier = UserNotifier.new
+  file = ARGV[0]
+  logger.log "Starting GDrive-Sync service for #{file}"
+
+  gdrive_sync = GDriveFileSynchronizer.new logger, user_notifier, file
+  watcher = FileSystemWatcher.new logger, INotify::Notifier.new, file
+  watcher.add_observer gdrive_sync
+  gdrive_sync.handle_change
+
+  watcher.start
+end
