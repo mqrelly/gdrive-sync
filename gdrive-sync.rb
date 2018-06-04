@@ -74,42 +74,6 @@ class FileSystemWatcher
   end
 end
 
-class AggregatingObserver
-  include Observable
-
-  def initialize(logger, cooldown_in_millisec, checktime_in_millisec = 50)
-    @logger = logger
-    @cooldown_sec = cooldown_in_millisec / 1000
-    @check_sec = checktime_in_millisec / 1000
-
-    @thr = Thread.start do
-      loop do
-        sleep @check_sec
-        trigger if cooldown_passed?
-      end
-    end
-  end
-
-  def update(*args)
-    @logger.log "[AGGR] Received: #{args.first}"
-    @last_event_time = Time.now
-    @last_event_args = args
-  end
-
-  private
-
-  def cooldown_passed?
-    !@last_event_time.nil? && (@last_event_time + @cooldown_sec) < Time.now
-  end
-
-  def trigger
-    @logger.log "[AGGR] trigger"
-    changed
-    notify_observers(*@last_event_args)
-    @last_event_time = nil
-  end
-end
-
 class GDriveFileSynchronizer
   attr_reader :path, :file, :dir, :state
 
