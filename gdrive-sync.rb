@@ -17,11 +17,11 @@ class UserNotifier
   end
 
   def info(title, msg)
-    `notify-send --urgency=normal --app-name="#{@app_name}" --category=Info "#{@app_name} - #{title}" "#{msg}"`
+    `notify-send --urgency=normal --app-name="#{@app_name}" --category=Info --expire-time=1 "#{@app_name} - #{title}" "#{msg}"`
   end
 
   def warning(title, msg)
-    `notify-send --urgency=critical --app-name="#{@app_name}" --category=Warning "#{@app_name} - #{title}" "#{msg}"`
+    `notify-send --urgency=critical --app-name="#{@app_name}" --category=Warning --icon=dialog-warning "#{@app_name} - #{title}" "#{msg}"`
   end
 end
 
