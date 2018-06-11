@@ -38,7 +38,7 @@ class FileSystemWatcher
     elsif pathes.is_a? Enumerable
       @dirs_and_files = pathes
         .map{|p| [File.dirname(p), File.basename(p)]}
-        .reduce(Hash.new) do |h,i| 
+        .reduce(Hash.new) do |h,i|
           dir,file = i[0],i[1]
 
           file_list = h[dir]
@@ -82,29 +82,38 @@ class GDriveFileSynchronizer
     @user_notifier = user_notifier
 
     @path = path
-    @state = :unsynchronized
+    @state = :started
   end
 
   def handle_change
     cloud_ver = get_cloud_version
     local_ver = get_local_version
 
-    if cloud_ver == local_ver
-      if @state == :unsynchronized
-        versions_came_in_sync(cloud_ver) 
+    case @state
+    when :started
+      if cloud_ver == local_ver
+        versions_came_in_sync(cloud_ver)
       else
-        still_in_sync
+        versions_went_out_of_sync
       end
-    else
-      if @state == :synchronized
-        if did_cloud_changed?(cloud_ver)
-          versions_went_out_of_sync
-        else
-          push_local_to_cloud(cloud_ver)
-        end
+    when :unsynchronized
+      if cloud_ver == local_ver
+        versions_came_in_sync(cloud_ver)
       else
         still_out_of_sync
       end
+    when :synchronized
+      if cloud_ver == local_ver
+        still_in_sync
+      else
+        if did_cloud_changed?(cloud_ver)
+          versions_went_out_of_sync
+        else
+          push_local_to_cloud(local_ver)
+        end
+      end
+    else
+      throw "Unrecognized state '#{@state}'"
     end
   end
 
@@ -115,10 +124,12 @@ class GDriveFileSynchronizer
   private
 
   def still_in_sync
+    @state = :synchronized
     @logger.log "[SYNC] No content change for #{@path}"
   end
 
   def still_out_of_sync
+    @state = :unsynchronized
     @logger.log "[SYNC] Versions are still out of sync for #{@path}"
   end
 
@@ -138,7 +149,7 @@ class GDriveFileSynchronizer
   end
 
   def push_local_to_cloud(cloud_ver)
-    `yes | head -1 | drive push #{@path}`
+    `yes | head -1 | drive push --force #{@path}`
 
     @last_known_cloud_ver = cloud_ver
 
