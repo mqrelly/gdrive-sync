@@ -70,7 +70,19 @@ class FileSystemWatcher
       end
     end
 
-    @notifier.run
+    @running = true
+    Thread.new do
+      notifier_io = @notifier.to_io
+      while @running
+        if IO.select([notifier_io], [], [], 1)
+          @notifier.process
+        end
+      end
+    end
+  end
+
+  def stop
+    @running = false
   end
 end
 
@@ -185,11 +197,19 @@ if $0 == __FILE__
   user_notifier = UserNotifier.new
   file = ARGV[0]
   logger.log "Starting GDrive-Sync service for #{file}"
+  logger.log "(Press Ctrl+C to exit)"
 
   gdrive_sync = GDriveFileSynchronizer.new logger, user_notifier, file
   watcher = FileSystemWatcher.new logger, INotify::Notifier.new, file
   watcher.add_observer gdrive_sync
   gdrive_sync.handle_change
 
-  watcher.start
+  ["INT", "TERM"].each do |sig|
+    Signal.trap(sig) do
+      puts "Terminating..."
+      watcher.stop
+    end
+  end
+
+  watcher.start.join
 end
