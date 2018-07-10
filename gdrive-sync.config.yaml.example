@@ -1,0 +1,7 @@
+---
+# Example
+
+watch_files:
+    - /home/jdoe/GoogleDrive/abc.txt
+    - ~/GoogleDrive/a/xyz.doc
+

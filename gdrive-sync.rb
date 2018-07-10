@@ -4,6 +4,7 @@ require "rubygems"
 require "bundler/setup"
 require "rb-inotify"
 require "observer"
+require "yaml"
 
 class Logger
   def log(msg)
@@ -33,10 +34,12 @@ class FileSystemWatcher
     @notifier = notifier
 
     if pathes.is_a? String
+      pathes = File.expand_path(pathes)
       dir,file = File.dirname(pathes),File.basename(pathes)
       @dirs_and_files = {dir => [file]}
     elsif pathes.is_a? Enumerable
       @dirs_and_files = pathes
+        .map{|p| File.expand_path p}
         .map{|p| [File.dirname(p), File.basename(p)]}
         .reduce(Hash.new) do |h,i|
           dir,file = i[0],i[1]
@@ -48,6 +51,8 @@ class FileSystemWatcher
           else
             file_list.push file
           end
+
+          h
         end
     else
       throw ArgumentError.new "Don't know what to do with 'pathes' as a '#{pathes.class.name}'"
@@ -87,7 +92,7 @@ class FileSystemWatcher
 end
 
 class GDriveFileSynchronizer
-  attr_reader :path, :file, :dir, :state
+  attr_reader :path, :state
 
   def initialize(logger, user_notifier, path)
     @logger = logger
@@ -129,8 +134,8 @@ class GDriveFileSynchronizer
     end
   end
 
-  def update(*args)
-    handle_change
+  def update(path, *args)
+    handle_change if path == @path
   end
 
   private
@@ -191,18 +196,53 @@ class GDriveFileSynchronizer
   end
 end
 
+def default_config_file
+  File.join File.dirname(__FILE__), "gdrive-sync.config.yaml"
+end
+
+def load_config(file)
+  begin
+    content = File.read file
+    YAML.load content
+  rescue
+    return nil
+  end
+end
 
 if $0 == __FILE__
+  config_file = ARGV[0] || default_config_file
+  config = load_config(config_file)
+  if config.nil?
+    puts [
+      "No configuration file found at '#{config_file}'.",
+      "Generating an empty one (try again after editing the above file)."
+    ]
+
+    File.write config_file, <<EOF
+---
+watch_files: []
+EOF
+    exit(-1)
+  end
+
+  files = config["watch_files"]
+  if files.empty?
+    puts "No files to watch. Exiting..."
+    exit
+  end
+
   logger = Logger.new
   user_notifier = UserNotifier.new
-  file = ARGV[0]
-  logger.log "Starting GDrive-Sync service for #{file}"
+  logger.log "Starting GDrive-Sync service"
   logger.log "(Press Ctrl+C to exit)"
 
-  gdrive_sync = GDriveFileSynchronizer.new logger, user_notifier, file
-  watcher = FileSystemWatcher.new logger, INotify::Notifier.new, file
-  watcher.add_observer gdrive_sync
-  gdrive_sync.handle_change
+  watcher = FileSystemWatcher.new logger, INotify::Notifier.new, files
+
+  files.each do |file|
+    gdrive_sync = GDriveFileSynchronizer.new logger, user_notifier, file
+    watcher.add_observer gdrive_sync
+    gdrive_sync.handle_change
+  end
 
   ["INT", "TERM"].each do |sig|
     Signal.trap(sig) do
